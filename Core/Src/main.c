@@ -10,7 +10,6 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "cmsis_os2.h"
 #include "uart.h"
 #include "adc.h"
 #include "flash.h"
@@ -36,26 +35,12 @@ int main(void)
   /* Configure the system clock */
   SystemClock_Config();
 
-  /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_ADC1_Init();
-  // MX_I2C3_Init();
-  // MX_MEMORYMAP_Init();
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
-  // MX_I2C1_Init();
   
-  // MX_IWDG_Init();
-  MX_FLASH_Init();
-
-  uart_write_debug("Start FW!", 20);
+  uart_write_debug("Start Bootloader!", 20);
      /* Init scheduler */
-  osKernelInitialize();  /* Call init function for freertos objects (in freertos.c) */
-  MX_FREERTOS_Init();
- 
-  /* Start scheduler */
-  osKernelStart();
-
   /* We should never get here as control is now taken by the scheduler */
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
