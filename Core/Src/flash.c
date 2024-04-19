@@ -16,11 +16,8 @@ float Bytes2float(uint8_t * ftoa_bytes_temp);
 void double2Bytes(uint8_t * ftoa_bytes_temp, float float_variable);
 float Bytes2double(uint8_t * ftoa_bytes_temp);
 
-const uint32_t QuadWord[4] = { 0x12345678,
-                               0x87654321,
-                               0x12344321,
-                               0x56788765
-                              };
+CRC_HandleTypeDef hcrc;
+
 
 /**
   * @brief FLASH Initialization Function
@@ -53,6 +50,10 @@ void MX_FLASH_Init(void)
   pOBInit.OptionType = OPTIONBYTE_USER;
   pOBInit.USERType = OB_USER_BOR_LEV;
   pOBInit.USERConfig = OB_BOR_LEVEL_4;
+
+  pOBInit.OptionType = OPTIONBYTE_USER;
+  pOBInit.USERType = OB_USER_NSWBOOT0;
+  pOBInit.USERConfig = OB_BOOT0_FROM_PIN;			// IMPORTAND SET SOFTWARE BOOT SELECT TO PIN
   if (HAL_FLASHEx_OBProgram(&pOBInit) != HAL_OK)
   {
     Error_Handler();
@@ -65,8 +66,6 @@ void MX_FLASH_Init(void)
   {
     Error_Handler();
   }
-
-  FlashWriteData(0x080fe000, &QuadWord, 1);
 }
 
 /**
@@ -157,15 +156,16 @@ float Bytes2double(uint8_t * ftoa_bytes_temp)
 }
 
 
-void FlashReadData(uint32_t StartPageAddress, uint32_t *RxBuf, uint16_t numberofwords)
-{
+void FlashReadData(uint32_t StartPageAddress, uint32_t *RxBuf, uint32_t numberofbytes)
+{	
+	uint32_t temp;
 	while (1)
 	{
 
 		*RxBuf = *(__IO uint32_t *)StartPageAddress;
 		StartPageAddress += 4;
 		RxBuf++;
-		if (!(numberofwords--)){
+		if (!(numberofbytes--)){
 			break;
 		}
 	}
@@ -174,19 +174,8 @@ void FlashReadData(uint32_t StartPageAddress, uint32_t *RxBuf, uint16_t numberof
 uint32_t FlashErase(uint32_t StartPageAddress, uint32_t numberofpages){
 	static FLASH_EraseInitTypeDef EraseInitStruct;
 	uint32_t PAGEError;
-//   /* Unlock the Flash to enable the flash control register access *************/
-//    HAL_FLASH_Unlock();
-//    __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS);
-//    HAL_FLASH_Lock();
-	// if (HAL_ICACHE_Disable() != HAL_OK)
-  	// {
-    // 	Error_Handler();
-	// }
 
-   /* Erase the user Flash area*/
-
-  uint32_t StartPage = GetPage(StartPageAddress);
-
+  	uint32_t StartPage = GetPage(StartPageAddress);
 
    /* Fill EraseInit structure*/
    EraseInitStruct.Banks = FLASH_BANK_1;
@@ -207,22 +196,42 @@ uint32_t FlashErase(uint32_t StartPageAddress, uint32_t numberofpages){
 }
 
 
-uint32_t FlashWriteData(uint32_t StartPageAddress, uint32_t *QuadW_Data, uint16_t numberofwords)
+uint32_t FlashWriteData(uint32_t StartPageAddress, uint32_t *pData, uint32_t DataLength)
 {
 	FLASH_EraseInitTypeDef EraseInitStruct;
 	uint32_t PAGEError;
-	int sofar=0;
-
-	  /* Unlock the Flash to enable the flash control register access *************/
-	// HAL_FLASH_Unlock();
-	// __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS);
-	// HAL_FLASH_Lock();
+	uint32_t index;
+	uint32_t length;
+	uint32_t remainder;
+	uint8_t remainder_data[16] = {0x0U};
 
    /* Erase the user Flash area*/
 
 	uint32_t StartPage = GetPage(StartPageAddress);
-	uint32_t EndPageAdress = StartPageAddress + numberofwords * FLASH_DATA_LEN;
+	uint32_t EndPageAdress = (DataLength % FLASH_PAGE_SIZE) ? StartPageAddress + (DataLength / FLASH_PAGE_SIZE) + 1:
+								StartPageAddress + (DataLength / FLASH_PAGE_SIZE);
 	uint32_t EndPage = GetPage(EndPageAdress);
+
+	/* Check the remaining of quad-word */
+	length = DataLength;
+	remainder = length & 0xFU;
+
+	if (remainder != 0U)
+	{
+		length = (length & 0xFFFFFFF0U);
+
+		/* Copy the remaining bytes */
+		for (index = 0U; index < remainder; index++)
+		{
+		remainder_data[index] = pData[length + index];
+		}
+
+		/* Fill the upper bytes with 0xFF */
+		for (index = remainder; index < 16U; index++)
+		{
+		remainder_data[index] = 0xFFU;
+		}
+	}
 
 	/* Fill EraseInit structure*/
 	EraseInitStruct.Banks = FLASH_BANK_1;
@@ -242,22 +251,14 @@ uint32_t FlashWriteData(uint32_t StartPageAddress, uint32_t *QuadW_Data, uint16_
 
 	/* Program the user Flash area word by word*/
 
-	while (sofar<numberofwords)
+	for (index = 0U; index < length; (index += 16U))
 	{
-	 if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_QUADWORD, StartPageAddress, QuadW_Data) == HAL_OK)
-	 {
-		 StartPageAddress += 16;  // use StartPageAddress += 2 for half word and 8 for double word
-		 sofar++;
-	 }
-	 else
-	 {
-	   /* Error occurred while writing data in Flash memory*/
-		 uart_write_debug("Failed to write flash\r\n",UART_THERMIS);
-		 HAL_FLASH_Lock();
-		 return HAL_FLASH_GetError ();
-	 }
+		if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_QUADWORD, (StartPageAddress + index), (uint32_t)(&pData[index])) != HAL_OK){
+			uart_write_debug("Failed to write flash\r\n",UART_THERMIS);
+		 	HAL_FLASH_Lock();
+		 	return HAL_FLASH_GetError ();
+		}
 	}
-
 	/* Lock the Flash to disable the flash control register access (recommended
 	  to protect the FLASH memory against possible unwanted operation) *********/
 	HAL_FLASH_Lock();
@@ -453,5 +454,43 @@ void Convert_To_Str(uint32_t *Data, char *Buf)
 	{
 		Buf[i] = Data[i/4]>>(8*(i%4));
 	}
+}
+
+/**
+  * @brief  Return the FLASH Read Protection level.
+  * @retval The return value can be one of the following values:
+  *         @arg OB_RDP_LEVEL_0: No protection
+  *         @arg OB_RDP_LEVEL_1: Read protection of the memory
+  *         @arg OB_RDP_LEVEL_2: Full chip protection
+  */
+uint32_t FLASH_GetReadOutProtectionLevel(void)
+{
+  FLASH_OBProgramInitTypeDef flash_ob;
+
+  /* Get the Option bytes configuration */
+  HAL_FLASHEx_OBGetConfig(&flash_ob);
+
+  return flash_ob.RDPLevel;
+}
+
+uint8_t bootloader_verify_crc (uint8_t *pData, uint32_t len, uint32_t crc_host)
+{
+    uint32_t uwCRCValue=0xff;
+
+    for (uint32_t i=0 ; i < len ; i++)
+	{
+        uint32_t i_data = pData[i];
+        uwCRCValue = HAL_CRC_Accumulate(&hcrc, &i_data, 1);
+	}
+
+	 /* Reset CRC Calculation Unit */
+  __HAL_CRC_DR_RESET(&hcrc);
+
+	if( uwCRCValue == crc_host)
+	{
+		return 0;
+	}
+
+	return 1;
 }
 
